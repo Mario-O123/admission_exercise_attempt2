@@ -532,6 +532,20 @@ mod tests {
     assert!(!Game::in_bounds(24));
     }
 
+    //testing switch_turns
+    #[test]
+    fn test_switch_turn() {
+    let mut game = Game::new();
+
+    //check case: by default current_player is White, so after switch, it should be Black
+    game.switch_turn();
+    assert_eq!(game.current_player, Player::Black);
+
+    //check case: another switch will cause White to be current_player
+    game.switch_turn();
+    assert_eq!(game.current_player, Player::White);
+    }
+
     //testing forms_mill
     #[test]
     fn test_place_and_form_mill() {
@@ -579,6 +593,33 @@ mod tests {
     assert!(!game.is_part_of_mill(0));
     assert!(!game.is_part_of_mill(7));
     }
+
+    #[test]
+    fn test_is_part_of_mill_multiple_mills() {
+    let mut game = Game::new();
+
+    //check case: create first mill
+    game.board[0] = Some(Player::White);
+    game.board[1] = Some(Player::White);
+    game.board[2] = Some(Player::White);
+
+    assert!(game.is_part_of_mill(1));
+    assert!(game.is_part_of_mill(0));
+    assert!(game.is_part_of_mill(2));
+
+    //check case: break first mill
+    game.board[0] = None;
+    game.board[2] = None;
+    assert!(!game.is_part_of_mill(1));
+
+    //check case: build new mill
+    game.board[9] = Some(Player::White);
+    game.board[17] = Some(Player::White);
+    assert!(game.is_part_of_mill(1));
+    assert!(game.is_part_of_mill(9));
+    assert!(game.is_part_of_mill(17));
+    }
+
     //testing: can_player_fly
     //note: dont have to set phase: Moving, because we never
     //call can_player_fly in the Placing section of action()
@@ -695,6 +736,113 @@ mod tests {
     game.maybe_update_phase_after_action();
     assert!(matches!(game.phase, Phase::Moving));
     }
+
+    //testing action
+
+    #[test]
+    fn test_action_place_wrong_turn() {
+    let mut game = Game::new();
+
+    //check case: White starts, but Black tries to place
+    let a: Action = "B P 0".parse().unwrap();
+    assert!(game.action(a).is_err());
+    }
+
+    #[test]
+    fn test_action_place_out_of_bounds() {
+    let mut game = Game::new();
+
+    let a: Action = "W P 24".parse().unwrap();
+    assert!(game.action(a).is_err());
+    }
+
+    #[test]
+    fn test_action_place_on_occupied() {
+    let mut game = Game::new();
+
+    let a1: Action = "W P 0".parse().unwrap();
+    let a2: Action = "B P 0".parse().unwrap();
+
+    assert!(game.action(a1).is_ok());
+    assert!(game.action(a2).is_err());
+    }
+
+    #[test]
+    fn test_action_place_during_pending_removal() {
+    let mut game = Game::new();
+    //setup: White forms a mill 0-6-7
+
+    for act in ["W P 0", "B P 1", "W P 6", "B P 2", "W P 7"] {
+        game.action(act.parse().unwrap()).unwrap();
+    }
+
+    //check case: cause White placed on 7 last and formed mill, pending_removal is true
+    let illegal: Action = "W P 10".parse().unwrap();
+    assert!(game.action(illegal).is_err());
+    }
+
+    #[test]
+    fn test_action_move_in_placing_phase_fail() {
+    let mut game = Game::new();
+
+    let move_action: Action = "W M 0 1".parse().unwrap();
+    assert!(game.action(move_action).is_err());
+    }
+
+    #[test]
+    fn test_action_move_to_occupied() {
+    let mut game = Game::new();
+    game.board[0] = Some(Player::White);
+    game.board[1] = Some(Player::Black);
+
+    game.phase = Phase::Moving;
+
+    let move_action: Action = "W M 0 1".parse().unwrap();
+    assert!(game.action(move_action).is_err());
+    }
+
+    #[test]
+    fn test_action_move_not_neighbor_when_not_flying() {
+    let mut game = Game::new();
+    game.phase = Phase::Moving;
+
+    //setup: White has more than 3 pieces, so no flying
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+    game.board[10] = Some(Player::White);
+
+    //check case: White trying to move to non neighbor should fail
+    let move_action: Action = "W M 0 10".parse().unwrap();
+    assert!(game.action(move_action).is_err());
+    }
+
+    #[test]
+    fn test_action_move_flying_allowed() {
+    let mut game = Game::new();
+    game.phase = Phase::Moving;
+
+    //White has exactly 3 pieces, so flying is allowed 
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+
+    //check case: moving to any point should be allowed
+    let move_action: Action = "W M 0 10".parse().unwrap();
+    assert!(game.action(move_action).is_ok());
+    }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
