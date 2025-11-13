@@ -1,0 +1,54 @@
+W P 17
+B P 19
+W P 10
+B P 5
+W P 13
+B P 3
+W P 14
+B P 12
+W P 9
+B P 18
+W P 2
+B P 4
+W P 16
+B P 21
+W P 20
+B P 15
+W P 11
+B P 22
+W M 16 23
+B M 5 6
+W M 17 16
+B M 15 7
+W M 9 1
+B M 4 5
+W M 14 15
+B M 7 0
+W M 15 7
+B M 3 4
+B R 20
+W M 2 3
+B M 21 20
+B R 11
+W M 10 11
+B M 20 21
+W M 11 10
+B M 19 11
+W M 3 2
+B M 11 3
+W M 23 15
+B M 18 17
+W M 15 8
+B M 17 9
+W M 16 17
+B M 12 11
+W M 13 14
+B M 5 13
+W M 14 15
+B M 13 14
+W M 17 16
+B M 9 17
+W M 15 23
+B M 14 15
+W M 10 9
+B M 11 10
