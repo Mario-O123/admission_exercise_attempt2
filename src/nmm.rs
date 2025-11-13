@@ -171,7 +171,8 @@ pub trait NmmGame {
 enum Phase {
     Placing,
     Moving,
-    // Flying wird dynamisch pro Spieler gehandhabt (wenn ein Spieler nur 3 Steine hat).
+    //Flying will be handled per player in Moving, when a player has 3 pieces left
+    //having a Flying phase would require me to handel changing phases Moving and Flying if 1 player is in Flying while  the other isnt = annoying
 }
 
 #[derive(Clone, Debug)]
@@ -184,7 +185,6 @@ struct GameState {
     pending_removal: bool,
 }
 
-
 /*
 Complete the struct called `Game` that implements the `NmmGame` trait. All functionality exposed by
 the trait should be implemented.
@@ -193,19 +193,17 @@ the trait should be implemented.
 pub struct Game {
     board: [Option<Piece>; BOARD_POINTS],
     current_player: Player,
-    /// Anzahl tatsächlich gesetzter Steine (nur Placing hochzählen; Removals reduzieren das nicht)
+    //these ..._placed don't change when removing pieces
     white_placed: u8,
     black_placed: u8,
     phase: Phase,
-    /// Nach einer Mühle: es muss *sofort* ein Remove folgen (durch denselben Spieler)
-    pending_removal: bool,
-    /// Undo-Stack mit *vollständigen* Snapshots
-    history: Vec<GameState>,
+    pending_removal: bool, //this attribut is used to control that a player has to immediately remove after they formed a mill
+    game_states: Vec<GameState>, //saves the states of a game
 }
 
 impl Game {
     fn save_state(&mut self) {
-        self.history.push(GameState {
+        self.game_states.push(GameState {
             board: self.board,
             current_player: self.current_player,
             white_placed: self.white_placed,
@@ -213,9 +211,7 @@ impl Game {
             phase: self.phase,
             pending_removal: self.pending_removal,
         });
-    }
-
-    #[inline]
+    }    
     fn in_bounds(p: Point) -> bool {
         p < BOARD_POINTS
     }
@@ -223,7 +219,8 @@ impl Game {
     fn count_pieces(&self, player: Player) -> usize {
         self.board.iter().filter(|s| **s == Some(player)).count()
     }
-
+    
+    //forms_mill checks if after a player moved or placed a piece, if this action now made a mill, use it to set pending_removal true
     fn forms_mill(&self, point: Point, player: Player) -> bool {
         for mill in MILLS.iter() {
             if mill.contains(&point) && mill.iter().all(|&p| self.board[p] == Some(player)) {
@@ -232,7 +229,7 @@ impl Game {
         }
         false
     }
-
+    //is_part_of_mill checs if a piece which is already on board part of a mill or not = needed if a remove action is pending
     fn is_part_of_mill(&self, point: Point) -> bool {
         if let Some(color) = self.board[point] {
             for mill in MILLS.iter() {
@@ -244,30 +241,33 @@ impl Game {
         false
     }
 
+    //task: check if the opp has 1 piece at minimum, which isnt in a mil so can be removed
     fn opponent_has_non_mill_piece(&self, opponent: Player) -> bool {
         self.board.iter().enumerate().any(|(i, s)| {
             *s == Some(opponent) && !self.is_part_of_mill(i)
         })
     }
-
+    //task: if can_player_fly is true, then the player can move to any free point on the board
     fn can_player_fly(&self, player: Player) -> bool {
         self.count_pieces(player) == 3
     }
 
+    //task: a player can only win, if they have at minimum 1 legal move they can make
     fn has_legal_move(&self, player: Player) -> bool {
+        //during Placing, dont count a blockade as no legal moves left
+        if matches!(self.phase, Phase::Placing) {
+            return true;
+        }
         let player_count = self.count_pieces(player);
         if player_count == 0 {
             return false;
         }
-        // In Placing-Phase keine Blockade anhand von Zügen bewerten
-        if matches!(self.phase, Phase::Placing) {
-            return true;
-        }
-        // Flying: mindestens ein freies Feld + mindestens ein eigener Stein genügt
+        
+        //if a player can fly, then only one of their pieces and 1 free point is needed to make legal move
         if self.can_player_fly(player) {
             return self.board.iter().any(|s| s.is_none());
         }
-        // Normal Moving: irgendein eigener Stein hat einen freien Nachbarn
+        //during Moving, the player has to use their own piece and has to be able to move to a neighbor
         for (i, slot) in self.board.iter().enumerate() {
             if *slot == Some(player) && NEIGHBORS[i].iter().any(|&n| self.board[n].is_none()) {
                 return true;
@@ -277,15 +277,15 @@ impl Game {
     }
 
     fn maybe_update_phase_after_action(&mut self) {
-        // Wechsel von Placing -> Moving, sobald 18 Steine platziert wurden
-        if matches!(self.phase, Phase::Placing) && (self.white_placed as u32 + self.black_placed as u32) == 18 {
-            // Nur umstellen, wenn gerade *keine* Removal-Pflicht ansteht
+        //Wont treat Flying as own phase, but use still Moving but allow flying when a player has =3 pieces
+
+        //here, swithc from Placing to Moving after 18 pieces have been placed
+        if matches!(self.phase, Phase::Placing) && (self.white_placed + self.black_placed) == 18 {
+            //cahnge the phase to Moving, if pending_removal is false = a remove action doesn't have to happen immediately
             if !self.pending_removal {
                 self.phase = Phase::Moving;
             }
         }
-        // Flying wird dynamisch in den Regeln für Moves berücksichtigt;
-        // Wir behalten phase = Moving bei und erlauben Flying, sobald ein Spieler nur 3 Steine hat.
     }
 
     fn switch_turn(&mut self) {
@@ -304,19 +304,19 @@ impl NmmGame for Game {
             black_placed: 0,
             phase: Phase::Placing,
             pending_removal: false,
-            history: Vec::new(),
+            game_states: Vec::new(),
         }
     }
 
     fn action(&mut self, action: Action) -> Result<(), &'static str> {
-        // 1) Richtiger Spieler?
+        // check if the right player is thaking the action
         if action.player != self.current_player {
             return Err("Not this player's turn");
         }
 
         match action.action {
             ActionKind::Place(p) => {
-                // Place nur erlaubt, wenn: keine pending_removal und Phase Placing
+                //Allow placing, only if pending_removal is false AND we are in Placing
                 if self.pending_removal {
                     return Err("Removal required");
                 }
@@ -330,27 +330,25 @@ impl NmmGame for Game {
                     return Err("Point occupied");
                 }
 
-                // Mutationen -> vorher Snapshot
+                //before doing the action, save the state of the current game
                 self.save_state();
 
-                // Setzen
+                //here, the actual Placing action
                 self.board[p] = Some(self.current_player);
                 match self.current_player {
                     Player::White => self.white_placed += 1,
                     Player::Black => self.black_placed += 1,
                 }
 
-                // Mill nach Platzierung?
+                //was a mill formed after the action?
                 if self.forms_mill(p, self.current_player) {
-                    self.pending_removal = true;
-                    // kein Turn-Switch; Removal muss folgen
+                    self.pending_removal = true; //no player switch cause there has to be a remove action first
                 } else {
                     self.switch_turn();
                 }
 
-                // Phase ggf. umstellen (falls 18 Steine gesetzt und keine Removal-Pflicht)
+                //change phase, if 18 pieces placed and no pending_removal
                 self.maybe_update_phase_after_action();
-
                 Ok(())
             }
 
@@ -374,36 +372,35 @@ impl NmmGame for Game {
                     return Err("Cannot move in placing phase");
                 }
 
-                // Move-Regeln (Flying erlaubt, wenn Spieler nur noch 3 Steine hat)
+                //player can fly in Moving if they have 3 pieces left
                 let can_fly = self.can_player_fly(self.current_player);
                 if !can_fly {
-                    // Muss Nachbar sein
+                    //if the player isnt allowed to fly, they have to move to a neigbor
                     if !NEIGHBORS[from].contains(&to) {
-                        return Err("Not adjacent");
+                        return Err("Not a neighbor");
                     }
                 }
 
-                // Snapshot
+                //save state before actual action
                 self.save_state();
 
-                // Ausführen
+                //actual Move
                 self.board[from] = None;
                 self.board[to] = Some(self.current_player);
 
-                // Mill nach Zug?
+                //was mill formed after the move was made?
                 if self.forms_mill(to, self.current_player) {
                     self.pending_removal = true;
-                    // kein Turn-Switch
+            
                 } else {
                     self.switch_turn();
                 }
 
-                // Phase bleibt Moving; Flying dynamisch
                 Ok(())
             }
 
             ActionKind::Remove(p) => {
-                // Remove nur erlaubt, wenn gerade Removal ansteht
+                //use pending_removal to check if a remove is allowed
                 if !self.pending_removal {
                     return Err("No removal pending");
                 }
@@ -415,25 +412,23 @@ impl NmmGame for Game {
                     return Err("Cannot remove own piece");
                 }
 
-                // Regel: Wenn es gegnerische Steine außerhalb einer Mühle gibt,
-                // darf man keinen Mühlenstein entfernen.
+                //if opp has pieces which are not in a mill, they cant be removed
                 let opponent = self.current_player.opposite();
                 let opp_has_non_mill = self.opponent_has_non_mill_piece(opponent);
                 if opp_has_non_mill && self.is_part_of_mill(p) {
-                    return Err("Must remove non-mill piece if possible");
+                    return Err("Must remove non mill piece if possible");
                 }
 
-                // Snapshot
+                //save state before action
                 self.save_state();
 
-                // Entfernen
+                //actual removal
                 self.board[p] = None;
                 self.pending_removal = false;
 
-                // Nach Removal ggf. Phasewechsel prüfen (Placing -> Moving), falls alle 18 gesetzt sind
+                //if all 18 pieces are set for Placing, then after removal change phase
                 self.maybe_update_phase_after_action();
 
-                // Turn an den Gegner
                 self.switch_turn();
 
                 Ok(())
@@ -442,7 +437,7 @@ impl NmmGame for Game {
     }
 
     fn undo(&mut self) -> Result<(), &'static str> {
-        match self.history.pop() {
+        match self.game_states.pop() {
             Some(prev) => {
                 self.board = prev.board;
                 self.current_player = prev.current_player;
@@ -461,28 +456,26 @@ impl NmmGame for Game {
     }
 
     fn winner(&self) -> Option<Player> {
-        // In der Placing-Phase nie einen Gewinner melden
+        //Never announce a winner in Placin, cause not all 18 pieces for Placing have been set
     if matches!(self.phase, Phase::Placing) {
         return None;
     }
-    // (alternativ/zusätzlich ginge auch:) 
-    // if (self.white_placed as u32 + self.black_placed as u32) < 18 { return None; }
 
-    // Regel 1: < 3 Steine => verloren
-    let w = self.count_pieces(Player::White);
-    let b = self.count_pieces(Player::Black);
-    if w < 3 {
+    //if a player has less than 3 pieces, they have lost
+    let white_pieces = self.count_pieces(Player::White);
+    let black_pieces = self.count_pieces(Player::Black);
+    if white_pieces < 3 {
         return Some(Player::Black);
     }
-    if b < 3 {
+    if black_pieces < 3 {
         return Some(Player::White);
     }
 
-    // Regel 2: Keine legalen Züge (wenn nicht im Flying)
-    if w > 3 && !self.has_legal_move(Player::White) {
+    //if a player cant fly and is in Moving, and cannot make any legal moves, they have lost
+    if white_pieces > 3 && !self.has_legal_move(Player::White) {
         return Some(Player::Black);
     }
-    if b > 3 && !self.has_legal_move(Player::Black) {
+    if black_pieces > 3 && !self.has_legal_move(Player::Black) {
         return Some(Player::White);
     }
 
@@ -507,13 +500,204 @@ mod tests {
     }
     #[test]
     fn test_board_new_is_empty_local() {
-        let g = Game::new();
-        assert_eq!(g.points().len(), 24);
-        assert!(g.points().iter().all(|p| p.is_none()));
-        assert_eq!(g.current_player, Player::White);
-        assert!(matches!(g.phase, Phase::Placing));
-        assert!(!g.pending_removal);
+        let game = Game::new();
+        assert_eq!(game.points().len(), 24);
+        assert!(game.points().iter().all(|p| p.is_none()));
+        assert_eq!(game.current_player, Player::White);
+        assert!(matches!(game.phase, Phase::Placing));
+        assert!(!game.pending_removal);
     }
+    //testing count_pieces
+    #[test]
+    fn test_count_pieces() {
+    let mut game = Game::new();
+    assert_eq!(game.count_pieces(Player::White), 0);
+    assert_eq!(game.count_pieces(Player::Black), 0);
+
+    game.board[0] = Some(Player::White);
+    game.board[1] = Some(Player::White);
+    game.board[2] = Some(Player::Black);
+    assert_eq!(game.count_pieces(Player::White), 2);
+    assert_eq!(game.count_pieces(Player::Black), 1);
+
+    //check case: count after 1 less White piece
+    game.board[1] = None;
+    assert_eq!(game.count_pieces(Player::White), 1);
+    }
+    //testing in_bounds
+    #[test]
+    fn test_in_bounds() {
+    assert!(Game::in_bounds(0));
+    assert!(Game::in_bounds(23));
+    assert!(!Game::in_bounds(24));
+    }
+
+    //testing forms_mill
+    #[test]
+    fn test_place_and_form_mill() {
+    let mut game = Game::new();
+
+    //setup: White forms mill 0-6-7
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+
+    assert!(game.forms_mill(7, Player::White));
+    assert!(game.forms_mill(0, Player::White));
+    assert!(game.forms_mill(6, Player::White));
+
+    //check case: Black doesnt form a mill
+    assert!(!game.forms_mill(7, Player::Black));
+
+    //check case: cannot form a mill with 2 pieces
+    game.board[6] = None;
+    assert!(!game.forms_mill(7, Player::White));
+    }
+
+    //testing: is_part_of_mill
+    #[test]
+    fn test_is_part_of_mill() {
+    let mut game = Game::new();
+
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+
+    assert!(game.is_part_of_mill(0));
+    assert!(game.is_part_of_mill(6));
+    assert!(game.is_part_of_mill(7));
+
+    //check case: en empty point shouldnt be part of a mill
+    assert!(!game.is_part_of_mill(1));
+
+    //check case: Black having a single piece doesnt form a mill
+    game.board[3] = Some(Player::Black);
+    assert!(!game.is_part_of_mill(3));
+
+    //check case: after a piece from a White mill moved, the other pieces in that former mill arent in a mill anymore
+    game.board[6] = None;
+    assert!(!game.is_part_of_mill(0));
+    assert!(!game.is_part_of_mill(7));
+    }
+    //testing: can_player_fly
+    //note: dont have to set phase: Moving, because we never
+    //call can_player_fly in the Placing section of action()
+    #[test]
+    fn test_can_player_fly() {
+    let mut game = Game::new();
+
+    //check case: if White has 3 pieces, it can fly
+    game.board[0] = Some(Player::White);
+    game.board[1] = Some(Player::White);
+    game.board[2] = Some(Player::White);
+    assert!(game.can_player_fly(Player::White));
+
+    //check case: if White has > 3 pieces it cannot fly
+    game.board[3] = Some(Player::White);
+    assert!(!game.can_player_fly(Player::White));
+
+    //check again: White cannot fly with =/= 3 pieces
+    game.board[3] = None;
+    game.board[2] = None;
+    assert!(!game.can_player_fly(Player::White));
+
+    //check case: Black has no pieces so cannot fly
+    assert!(!game.can_player_fly(Player::Black));
+    }
+
+    //tesing: has_legal_move
+    #[test]
+    fn test_has_legal_move() {
+    let mut game = Game::new();
+
+    //setup: in Moving because in Placing the players have always legal placing
+    game.phase = Phase::Moving;
+
+    //check case: White has piece on 0 and can move to a free neighbor (1 or 7)
+    game.board[0] = Some(Player::White);
+    assert!(game.has_legal_move(Player::White));
+ 
+    //check case: blocked player White has no legal move because Black blocked them with 1, 7
+    game.board[1] = Some(Player::Black);
+    game.board[7] = Some(Player::Black);
+    assert!(!game.has_legal_move(Player::White));
+
+    //check case: White has legal move because they can fly (3 pieces) and choose 1 free point
+    game.board = [None; 24];
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+    assert!(game.has_legal_move(Player::White));
+
+    //check case: player cannot make a legal move, if they have no pieces in Moving Phase, they have already lost
+    game.board = [None; 24];
+    assert!(!game.has_legal_move(Player::White));
+
+    //check case: player can always make a legal move (move as in placing)
+    game.phase = Phase::Placing;
+    assert!(game.has_legal_move(Player::White));
+    }
+
+    //testing of opponent_has_non_mill_piece
+    #[test]
+    fn test_opponent_has_non_mill_piece() {
+    let mut game = Game::new();
+
+    //setup: White is current_player by default, so opp is Black
+    let opponent = Player::Black;
+
+    //check case: opp Black has no pieces on board, so fn should fail
+    assert!(!game.opponent_has_non_mill_piece(opponent));
+
+    //check case: opp Black has 1 piece that is part of a mill, so fn should fail
+    game.board[0] = Some(Player::Black);
+    game.board[1] = Some(Player::Black);
+    game.board[2] = Some(Player::Black);
+    assert!(!game.opponent_has_non_mill_piece(opponent));
+
+    //check case: opp Black has 1 piece which is not in a mill, so fn should be true
+    game.board = [None; 24];
+    game.board[0] = Some(Player::Black);
+    assert!(game.opponent_has_non_mill_piece(opponent));
+
+    //check case: opp Black has multiple pieces but only 1 is not in mill (9)
+    game.board = [None; 24];
+    game.board[0] = Some(Player::Black);
+    game.board[1] = Some(Player::Black);
+    game.board[2] = Some(Player::Black);
+    game.board[9] = Some(Player::Black);
+    assert!(game.opponent_has_non_mill_piece(opponent));
+    }
+
+    //testing: maybe_update_phase_after_action
+    #[test]
+    fn test_maybe_update_phase_after_action() {
+    let mut game = Game::new();
+
+    //setup: start in Placing
+    assert!(matches!(game.phase, Phase::Placing));
+
+    //check case: if not all 18 pieces are placed, no change of phase
+    game.white_placed = 5;
+    game.black_placed = 5;
+    game.maybe_update_phase_after_action();
+    assert!(matches!(game.phase, Phase::Placing));
+
+    //check case: there are 18 pieces placed, but pending_removal is true, no player switch, we are in Placing until remove happens
+    game.white_placed = 9;
+    game.black_placed = 9;
+    game.pending_removal = true;
+    game.maybe_update_phase_after_action();
+    assert!(matches!(game.phase, Phase::Placing));
+
+    //check case: 18 pieces placed, but pending_removal is false, so weitch to Moving
+    game.pending_removal = false;
+    game.maybe_update_phase_after_action();
+    assert!(matches!(game.phase, Phase::Moving));
+    }
+
+
+
 
 
 
