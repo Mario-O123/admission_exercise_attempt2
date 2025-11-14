@@ -307,134 +307,164 @@ impl NmmGame for Game {
             game_states: Vec::new(),
         }
     }
-
+    
+    //Note: here, I wasn't sure if removal action after a mill was formed by a player is a must, or only optional
+    //since on Wikipedia it says "player is allowed to remove...", not "must remove", so I added
+    //that if a mill is formed, the playwe who formed the mill has the option to either remove a piece
+    //of the opponent (normal case) or to skip his remove action and let the opponent place or move 
     fn action(&mut self, action: Action) -> Result<(), &'static str> {
-        // check if the right player is thaking the action
-        if action.player != self.current_player {
-            return Err("Not this player's turn");
+
+    let actor = action.player; //who tries the action
+    let current = self.current_player;
+    let opp = self.current_player.opposite();
+
+    match action.action {
+        ActionKind::Remove(p) => {
+            //check case: in any case, removal is only possible when a mill was formed so pending_removal = true
+            if !self.pending_removal {
+                return Err("No removal pending");
+            }
+            //check case: only the player who formed the mill, is allowed to remoev
+            if actor != current {
+                return Err("Only mill-forming player may remove");
+            }
+
+            if !Self::in_bounds(p) {
+                return Err("Out of bounds");
+            }
+            let victim = self.board[p].ok_or("No piece to remove")?; //WHAT?
+            if victim == current {
+                return Err("Cannot remove own piece");
+            }
+            
+            let opp_has_non_mill = self.opponent_has_non_mill_piece(opp);
+            if opp_has_non_mill && self.is_part_of_mill(p) {
+                return Err("Must remove non mill piece if possible");
+            }
+
+            //save the state of the game before the actual action
+            self.save_state();
+
+            //actual Remove action
+            self.board[p] = None;
+            self.pending_removal = false;
+
+            //check if a phase change needs to occur
+            self.maybe_update_phase_after_action();
+
+            self.switch_turn();
+
+            Ok(())
         }
 
-        match action.action {
-            ActionKind::Place(p) => {
-                //Allow placing, only if pending_removal is false AND we are in Placing
-                if self.pending_removal {
-                    return Err("Removal required");
-                }
-                if !matches!(self.phase, Phase::Placing) {
-                    return Err("Cannot place outside placing phase");
-                }
-                if !Self::in_bounds(p) {
-                    return Err("Out of bounds");
-                }
-                if self.board[p].is_some() {
-                    return Err("Point occupied");
-                }
-
-                //before doing the action, save the state of the current game
-                self.save_state();
-
-                //here, the actual Placing action
-                self.board[p] = Some(self.current_player);
-                match self.current_player {
-                    Player::White => self.white_placed += 1,
-                    Player::Black => self.black_placed += 1,
-                }
-
-                //was a mill formed after the action?
-                if self.forms_mill(p, self.current_player) {
-                    self.pending_removal = true; //no player switch cause there has to be a remove action first
-                } else {
-                    self.switch_turn();
-                }
-
-                //change phase, if 18 pieces placed and no pending_removal
-                self.maybe_update_phase_after_action();
-                Ok(())
+        ActionKind::Place(p) => {
+            //check case: placing is only allowed in Placing phase (meaning not all 18 pieces were placed)
+            if !matches!(self.phase, Phase::Placing) {
+                return Err("Cannot place outside placing phase");
+            }
+            if !Self::in_bounds(p) {
+                return Err("Out of bounds");
+            }//check case: is there already a piece at this point p?
+            if self.board[p].is_some() {
+                return Err("Point occupied");
             }
 
-            ActionKind::Move(from, to) => {
-                if self.pending_removal {
-                    return Err("Removal required");
+            //logic: Placing action is intended to happen after a mill was formed and pending_removal was set as true
+            if self.pending_removal {
+                //check case: if the actor is also the current player, they have to either remove a piece or skip removing action
+                if actor == current {
+                    return Err("Must either remove or let opponent move");
+                }//check case: if the opp wants to place after current player formed a mill, it means we skip removal and set opp as current player
+                else if actor == opp {
+                    self.pending_removal = false;
+                    self.current_player = actor; //meaning opp can now place, as current player skipped his removal chance
                 }
-                if !Self::in_bounds(from) || !Self::in_bounds(to) {
-                    return Err("Out of bounds");
+            } else {
+                if actor != current {
+                    return Err("Not this player's turn");
                 }
-                if from == to {
-                    return Err("Invalid move");
-                }
-                if self.board[from] != Some(self.current_player) {
-                    return Err("Source not owned by player");
-                }
-                if self.board[to].is_some() {
-                    return Err("Destination occupied");
-                }
-                if matches!(self.phase, Phase::Placing) {
-                    return Err("Cannot move in placing phase");
-                }
-
-                //player can fly in Moving if they have 3 pieces left
-                let can_fly = self.can_player_fly(self.current_player);
-                if !can_fly {
-                    //if the player isnt allowed to fly, they have to move to a neigbor
-                    if !NEIGHBORS[from].contains(&to) {
-                        return Err("Not a neighbor");
-                    }
-                }
-
-                //save state before actual action
-                self.save_state();
-
-                //actual Move
-                self.board[from] = None;
-                self.board[to] = Some(self.current_player);
-
-                //was mill formed after the move was made?
-                if self.forms_mill(to, self.current_player) {
-                    self.pending_removal = true;
+            }
             
-                } else {
-                    self.switch_turn();
-                }
+            //before doing the action, save the state of the current game
+            self.save_state();
 
-                Ok(())
+            self.board[p] = Some(actor);
+            match actor {
+                Player::White => self.white_placed += 1,
+                Player::Black => self.black_placed += 1,
             }
 
-            ActionKind::Remove(p) => {
-                //use pending_removal to check if a remove is allowed
-                if !self.pending_removal {
-                    return Err("No removal pending");
-                }
-                if !Self::in_bounds(p) {
-                    return Err("Out of bounds");
-                }
-                let victim = self.board[p].ok_or("No piece to remove")?;
-                if victim == self.current_player {
-                    return Err("Cannot remove own piece");
-                }
-
-                //if opp has pieces which are not in a mill, they cant be removed
-                let opponent = self.current_player.opposite();
-                let opp_has_non_mill = self.opponent_has_non_mill_piece(opponent);
-                if opp_has_non_mill && self.is_part_of_mill(p) {
-                    return Err("Must remove non mill piece if possible");
-                }
-
-                //save state before action
-                self.save_state();
-
-                //actual removal
-                self.board[p] = None;
-                self.pending_removal = false;
-
-                //if all 18 pieces are set for Placing, then after removal change phase
-                self.maybe_update_phase_after_action();
-
+            //check case: did the placing form a mill?
+            if self.forms_mill(p, actor) {
+                self.pending_removal = true;
+                //now no switch before either remove action is skipped or iniciated
+            } else {
                 self.switch_turn();
-
-                Ok(())
             }
+            self.maybe_update_phase_after_action();
+
+            Ok(())
+        }
+
+        ActionKind::Move(from, to) => {
+            if !Self::in_bounds(from) || !Self::in_bounds(to) {
+                return Err("Out of bounds");
+            }
+            if from == to {
+                return Err("Invalid move");
+            }
+            if matches!(self.phase, Phase::Placing) {
+                return Err("Cannot move in placing phase");
+            }
+
+            //logic: if a player wants to move after a mill was formed
+            if self.pending_removal {
+                if actor == current {
+                    //check case: because the current player formed the mill, they have to either take a remove action or skip it
+                    return Err("Must either remove or let opponent move");
+                }
+                //check case: the opp wants to move after the current player formed a mill, we consider this as player skipped chance to remove 
+                else if actor == opp {
+                    self.pending_removal = false;
+                    self.current_player = actor; //now the opp can make a move
+                }
+            } else {
+                if actor != current {
+                    return Err("Not this player's turn");
+                }
+            }
+
+            //now the one who called the latest action is the current player
+            if self.board[from] != Some(actor) {
+                return Err("From is not owned by player");
+            }
+            if self.board[to].is_some() {
+                return Err("Point is occupied");
+            }
+
+            //check case: can the player fly?
+            let can_fly = self.can_player_fly(actor);
+            if !can_fly && !NEIGHBORS[from].contains(&to) {
+                return Err("Not a neighbor");
+            }
+
+            self.save_state();
+
+            self.board[from] = None;
+            self.board[to] = Some(actor);
+
+            if self.forms_mill(to, actor) {
+                self.pending_removal = true;
+            } 
+            else {
+                self.switch_turn();
+            }
+
+            Ok(())
         }
     }
+}
+
 
     fn undo(&mut self) -> Result<(), &'static str> {
         match self.game_states.pop() {
