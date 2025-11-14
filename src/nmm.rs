@@ -332,7 +332,7 @@ impl NmmGame for Game {
             if !Self::in_bounds(p) {
                 return Err("Out of bounds");
             }
-            let victim = self.board[p].ok_or("No piece to remove")?; //WHAT?
+            let victim = self.board[p].ok_or("No piece to remove")?;
             if victim == current {
                 return Err("Cannot remove own piece");
             }
