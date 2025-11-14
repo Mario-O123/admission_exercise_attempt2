@@ -457,7 +457,7 @@ impl NmmGame for Game {
 
     fn winner(&self) -> Option<Player> {
         //Never announce a winner in Placin, cause not all 18 pieces for Placing have been set
-    if matches!(self.phase, Phase::Placing) {
+    if matches!(self.phase, Phase::Placing)|| self.pending_removal {
         return None;
     }
 
@@ -831,6 +831,348 @@ mod tests {
     let move_action: Action = "W M 0 10".parse().unwrap();
     assert!(game.action(move_action).is_ok());
     }
+
+    #[test]
+    fn test_action_remove_without_pending() {
+    let mut game = Game::new();
+
+    let r: Action = "W R 0".parse().unwrap();
+    assert!(game.action(r).is_err());
+    }
+
+    #[test]
+    fn test_action_remove_out_of_bounds() {
+    let mut game = Game::new();
+
+    let remove_action: Action = "W R 24".parse().unwrap();
+    assert!(game.action(remove_action).is_err());
+    }
+
+
+    #[test]
+    fn test_action_remove_own_piece_in_pending() {
+    let mut game = Game::new();
+
+    //setup: its White's turn and has to remove a piece, but tries to remove own piece
+    game.pending_removal = true;
+
+    game.board[3] = Some(Player::White); // own piece
+    game.current_player = Player::White;
+
+    let remove_action: Action = "W R 3".parse().unwrap();
+    assert!(game.action(remove_action).is_err());
+    }
+
+    #[test]
+    fn test_action_remove_mill_piece_when_non_mill_exists() {
+    let mut game = Game::new();
+
+    //setup: Black has a mill 0-1-2 but also 1 non mill at 5
+    //and White has to remove now
+    game.pending_removal = true;
+    game.current_player = Player::White;
+
+    game.board[0] = Some(Player::Black);
+    game.board[1] = Some(Player::Black);
+    game.board[2] = Some(Player::Black);
+    game.board[5] = Some(Player::Black);
+
+    //check case: White removing a Black piece in mill (0) should fail
+    let remove_action: Action = "W R 0".parse().unwrap();
+    assert!(game.action(remove_action).is_err());
+    }
+
+    #[test]
+    fn test_action_full_sequence() {
+    let mut game = Game::new();
+
+    let seq = [
+        "W P 0",
+        "B P 3",
+        "W P 6",
+        "B P 4",
+        "W P 7", //at this point White forms mill 0-6-7, has to remove a piece
+        "W R 4",
+        "B P 5",
+        "W P 15",
+        "B P 13",
+        "W P 23", //at this point White forms a mill again 15-23-7, so pending_removal is true, no player switch
+    ];
+
+    for a in seq {
+        assert!(game.action(a.parse().unwrap()).is_ok());
+    }
+
+    //check case: did White remove after first mill adn does White have to remove again?
+    assert_eq!(game.board[4], None);    // removed
+    assert_eq!(game.current_player, Player::White);
+    }
+
+    //testing of undo
+    #[test]
+    fn test_undo_after_simple_place() {
+    let mut game = Game::new();
+
+    let action: Action = "W P 0".parse().unwrap();
+    game.action(action).unwrap();
+
+    assert_eq!(game.board[0], Some(Player::White));
+    assert_eq!(game.current_player, Player::Black);
+
+    game.undo().unwrap();
+
+    assert_eq!(game.board[0], None);
+    assert_eq!(game.current_player, Player::White);
+    assert_eq!(game.white_placed, 0);
+    assert_eq!(game.phase, Phase::Placing);
+    }
+
+    #[test]
+    fn test_undo_chain_place() {
+    let mut game = Game::new();
+
+    let sequence = ["W P 0", "B P 1", "W P 6"];
+
+    for s in sequence {
+        game.action(s.parse().unwrap()).unwrap();
+    }
+    assert_eq!(game.board[6], Some(Player::White));
+
+    //check case: undo removes the last action (W P 6)
+    game.undo().unwrap();
+    assert_eq!(game.board[6], None);
+    assert_eq!(game.current_player, Player::White);
+
+    //check cace: repeated undo removes action (B P 1)
+    game.undo().unwrap();
+    assert_eq!(game.board[1], None);
+    assert_eq!(game.current_player, Player::Black);
+
+    //check case: repeated undo removes action (W P 0)
+    game.undo().unwrap();
+    assert_eq!(game.board[0], None);
+    assert_eq!(game.current_player, Player::White);
+
+    //check case: now that all actions got undone, a repeated undo() should fail
+    assert!(game.undo().is_err());
+    }
+
+    #[test]
+    fn test_undo_after_move() {
+    let mut game = Game::new();
+
+    //setup: undo for Moving phase
+    game.board[0] = Some(Player::White);
+    game.board[1] = None;
+    game.white_placed = 9;
+    game.black_placed = 9;
+    game.phase = Phase::Moving;
+
+    let move_action: Action = "W M 0 1".parse().unwrap();
+    game.action(move_action).unwrap();
+
+    assert_eq!(game.board[0], None);
+    assert_eq!(game.board[1], Some(Player::White));
+    assert_eq!(game.current_player, Player::Black);
+
+    game.undo().unwrap();
+
+    assert_eq!(game.board[0], Some(Player::White));
+    assert_eq!(game.board[1], None);
+    assert_eq!(game.current_player, Player::White);
+    }  
+
+    #[test]
+    fn test_undo_after_remove() {
+    let mut game = Game::new();
+
+    //setup: sequence of actions leads to white forming mill at 0-6-7
+    for s in ["W P 0", "B P 1", "W P 6", "B P 2", "W P 7"] {
+        game.action(s.parse().unwrap()).unwrap();
+    }
+
+    //now that White formed mill, pending_removal should be true
+    assert!(game.pending_removal);
+
+    let remove_action: Action = "W R 1".parse().unwrap();
+    game.action(remove_action).unwrap();
+
+    //check case: after remove action happens, 1 is empty and its Black's turn
+    assert_eq!(game.board[1], None);
+    assert_eq!(game.current_player, Player::Black);
+
+    game.undo().unwrap();
+    //check case: after undo(), Black has piece at 1 again, but White still has to remove immediately so it's White's turn
+    assert_eq!(game.board[1], Some(Player::Black));
+    assert!(game.pending_removal);
+    assert_eq!(game.current_player, Player::White);
+    }
+
+    #[test]
+    fn test_undo_after_phase_switch() {
+    let mut game = Game::new();
+
+    //setup: just barely before ending Placing phase, 1 placing needed
+    game.white_placed = 8;
+    game.black_placed = 9;
+    game.phase = Phase::Placing;
+
+    //this action should cause phase switch, if no pending_removal after placing
+    let action = "W P 5".parse().unwrap();
+    game.action(action).unwrap();
+
+    //check case: phase adjusted after placing
+    assert!(matches!(game.phase, Phase::Moving));
+
+    //check case: undo should restore Placing phase
+    game.undo().unwrap();
+    assert!(matches!(game.phase, Phase::Placing));
+    }
+
+    //tests for winner()
+
+    #[test]
+    fn test_no_winner_during_placing() {
+    let mut game = Game::new();
+
+    //check case: winner always None doring Placing
+    assert!(matches!(game.phase, Phase::Placing));
+    assert_eq!(game.winner(), None);
+
+    //check case: winner still None after White placed at 0
+    game.action("W P 0".parse().unwrap()).unwrap();
+    assert_eq!(game.winner(), None);
+
+    //check case: winner still None after Black placed at 3
+    game.action("B P 3".parse().unwrap()).unwrap();
+    assert_eq!(game.winner(), None);
+
+    //setup: White forms a mill and has to remove afterward
+    game.action("W P 6".parse().unwrap()).unwrap();
+    game.action("B P 4".parse().unwrap()).unwrap();
+    game.action("W P 7".parse().unwrap()).unwrap();
+    assert!(game.pending_removal);
+
+    //check case: no winner after White removes piece
+    game.action("W R 4".parse().unwrap()).unwrap();
+    assert_eq!(game.winner(), None);
+
+    assert_eq!(game.winner(), None);
+    }
+
+
+    #[test]
+    fn test_winner_under_three() {
+    let mut game = Game::new();
+
+    //setup: White has <3 pieces in Moving and Black has >= 3
+    game.phase = Phase::Moving;
+
+    game.board = [None; 24];
+    game.board[0] = Some(Player::White);
+    game.board[1] = Some(Player::White);
+
+    game.board[5] = Some(Player::Black);
+    game.board[6] = Some(Player::Black);
+    game.board[7] = Some(Player::Black);
+
+    assert_eq!(game.winner(), Some(Player::Black));
+    }
+
+    #[test]
+    fn test_winner_by_blockade() {
+    let mut game = Game::new();
+    game.phase = Phase::Moving;
+
+    //setup: White has 4 pieces, but all neighbors are blocked
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[5] = Some(Player::White);
+    game.board[4] = Some(Player::White);
+
+    game.board[1] = Some(Player::Black); // neighbor of 0
+    game.board[7] = Some(Player::Black);  // neigbor of 0 & 6
+    game.board[3] = Some(Player::Black);  // neighbor of 4
+    game.board[13] = Some(Player::Black); // neighbor of 5
+
+    //check case: White should have no legal moves left
+    assert!(!game.has_legal_move(Player::White));
+
+    //check case: because White is blocked, Black wins
+    assert_eq!(game.winner(), Some(Player::Black));
+    }
+
+    #[test]
+    fn test_no_winner_when_player_can_fly() {
+    let mut game = Game::new();
+    game.phase = Phase::Moving;
+
+    //setup: White has 3 stones (so can fly) and is blocked
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[7] = Some(Player::White);
+
+    game.board[1] = Some(Player::Black);
+    game.board[5] = Some(Player::Black);
+    game.board[15] = Some(Player::Black);
+
+    //check case: Black cannot win by blocking White
+
+    assert!(game.can_player_fly(Player::White));
+    assert_eq!(game.winner(), None);
+    }
+
+
+    #[test]
+    fn test_no_winner_during_pending_removal() {
+    let mut game = Game::new();
+    game.phase = Phase::Moving;
+
+    //setup: White has 4 pieces, so cannot fly, Black blocks all neighbors of White pieces
+    game.board[0] = Some(Player::White);
+    game.board[6] = Some(Player::White);
+    game.board[5] = Some(Player::White);
+    game.board[4] = Some(Player::White);
+
+    game.board[1] = Some(Player::Black);
+    game.board[7] = Some(Player::Black);
+    game.board[3] = Some(Player::Black);
+    game.board[13] = Some(Player::Black);
+
+    //check case: white would currently lose because all pieces are blocked, but before
+    //checking winner, set pending_removal true
+    assert!(!game.has_legal_move(Player::White));
+
+    game.pending_removal = true;
+
+    //check case: White is blocked but current_player and pending_removal is true, so Black hasnt won yet
+    assert_eq!(game.winner(), None);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
