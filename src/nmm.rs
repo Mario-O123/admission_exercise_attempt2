@@ -457,7 +457,7 @@ impl NmmGame for Game {
 
     fn winner(&self) -> Option<Player> {
         //Never announce a winner in Placin, cause not all 18 pieces for Placing have been set
-    if matches!(self.phase, Phase::Placing)|| self.pending_removal {
+    if matches!(self.phase, Phase::Placing) {
         return None;
     }
 
@@ -1121,70 +1121,6 @@ mod tests {
     assert!(game.can_player_fly(Player::White));
     assert_eq!(game.winner(), None);
     }
-
-
-    #[test]
-    fn test_no_winner_during_pending_removal() {
-    let mut game = Game::new();
-    game.phase = Phase::Moving;
-
-    //setup: White has 4 pieces, so cannot fly, Black blocks all neighbors of White pieces
-    game.board[0] = Some(Player::White);
-    game.board[6] = Some(Player::White);
-    game.board[5] = Some(Player::White);
-    game.board[4] = Some(Player::White);
-
-    game.board[1] = Some(Player::Black);
-    game.board[7] = Some(Player::Black);
-    game.board[3] = Some(Player::Black);
-    game.board[13] = Some(Player::Black);
-
-    //check case: white would currently lose because all pieces are blocked, but before
-    //checking winner, set pending_removal true
-    assert!(!game.has_legal_move(Player::White));
-
-    game.pending_removal = true;
-
-    //check case: White is blocked but current_player and pending_removal is true, so Black hasnt won yet
-    assert_eq!(game.winner(), None);
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
